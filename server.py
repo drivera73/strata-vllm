@@ -14,6 +14,7 @@ import os
 import re
 import time
 from collections import deque
+from datetime import datetime
 from pathlib import Path
 
 import psutil
@@ -42,6 +43,7 @@ class DashboardFiles(StaticFiles):
 PORT = int(os.environ.get("PORT", "8377"))
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
 CONFIG_FILE = DATA_DIR / "config.json"
+TOKEN_LOG_PATH = DATA_DIR / "token_log.jsonl"
 WEB_DIR = Path(__file__).parent / "web"
 
 HISTORY_LEN = 60          # one sample per second, kept 60 s
@@ -166,6 +168,101 @@ def counter_delta(key, m):
     return delta if delta >= 0 else 0.0
 
 
+# ------------------------------------------------------------------ token ledger
+# The vLLM /metrics token counters reset to 0 on every engine restart, and the
+# container log only keeps ~2 days, so a monthly total can't be read from the
+# live counters alone. We snapshot the CUMULATIVE counters to a JSONL ledger
+# every PERSIST_INTERVAL seconds; a monthly total is then a sum of per-interval
+# deltas, where a counter drop (new < old) is treated as a fresh segment (reset).
+PERSIST_INTERVAL = 60        # seconds between ledger snapshots
+LEDGER_MAX_LINES = 60 * 1440 # ~60 days of snapshots before pruning the oldest half
+
+
+def persist_token_ledger(m):
+    """Append a cumulative token-counter snapshot if it's due. Never raises."""
+    try:
+        pmt = m.get("prompt_tokens_total")
+        gnt = m.get("generation_tokens_total")
+        if pmt is None and gnt is None:
+            return
+        now = time.time()
+        last = STATE.get("last_ledger", 0.0)
+        if last and now - last < PERSIST_INTERVAL:
+            return
+        STATE["last_ledger"] = now
+        rec = {
+            "t": now,
+            "ts": datetime.fromtimestamp(now).isoformat(timespec="seconds"),
+            "prompt": int(pmt or 0),
+            "generation": int(gnt or 0),
+        }
+        with TOKEN_LOG_PATH.open("a") as f:
+            f.write(json.dumps(rec) + "\n")
+        # prune the oldest half once the ledger gets large
+        try:
+            with TOKEN_LOG_PATH.open("r") as f:
+                lines = f.readlines()
+            if len(lines) > LEDGER_MAX_LINES:
+                with TOKEN_LOG_PATH.open("w") as f:
+                    f.writelines(lines[len(lines) // 2:])
+        except Exception:
+            pass
+    except Exception:
+        log.exception("token ledger write failed")
+
+
+def ledger_total(window_secs=None):
+    """Sum token usage from the ledger over a trailing window (None = all time).
+
+    A drop between consecutive snapshots is an engine restart: the new segment's
+    counters start at 0, so its contribution is just the new value.
+    """
+    if not TOKEN_LOG_PATH.exists():
+        return None
+    try:
+        lines = TOKEN_LOG_PATH.read_text().splitlines()
+    except Exception:
+        return None
+    now = time.time()
+    lo = now - window_secs if window_secs else 0.0
+    recs = []
+    for ln in lines:
+        try:
+            r = json.loads(ln)
+        except Exception:
+            continue
+        if r.get("t", 0) >= lo:
+            recs.append(r)
+    if not recs:
+        return None
+    prompt = generation = 0
+    for prev, cur in zip(recs, recs[1:]):
+        # A drop (cur < prev) is an engine restart: the new segment's counters
+        # started at 0, so cur itself is that segment's tokens-so-far.
+        if cur["prompt"] < prev["prompt"]:
+            prompt += cur["prompt"]
+        else:
+            prompt += cur["prompt"] - prev["prompt"]
+        if cur["generation"] < prev["generation"]:
+            generation += cur["generation"]
+        else:
+            generation += cur["generation"] - prev["generation"]
+    # all-time: the very first record is a fresh segment start, so its value is
+    # tokens (not a delta). For a trailing window the first in-window record may
+    # already be mid-segment, so we must NOT add it.
+    if window_secs is None:
+        prompt += recs[0]["prompt"]
+        generation += recs[0]["generation"]
+    return {
+        "prompt": prompt,
+        "generation": generation,
+        "total": prompt + generation,
+        "from": recs[0]["ts"],
+        "to": recs[-1]["ts"],
+        "samples": len(recs),
+    }
+
+
 def _pcie_max_gen(h):
     # nvidia-ml-py renamed nvmlDeviceGetPcieLinkGen -> nvmlDeviceGetGpuMaxPcieLinkGeneration
     fn = getattr(pynvml, "nvmlDeviceGetGpuMaxPcieLinkGeneration", None)
@@ -260,6 +357,8 @@ def sample():
         STATE["last_error"] = f"backend unreachable: {e.__class__.__name__}"
     else:
         STATE["last_error"] = ""
+        if vllm_m:
+            persist_token_ledger(vllm_m)
     try:
         gpu = gpu_stats()
     except Exception:
@@ -379,6 +478,15 @@ def set_settings(body: dict):
         q.clear()
     sample()
     return {"ok": True}
+
+
+@app.get("/api/token-usage")
+def token_usage(window: int = 0):
+    """Token usage summed from the persistent ledger.
+
+    ?window=<seconds> for a trailing window; 0 (default) = all-time.
+    """
+    return ledger_total(window if window > 0 else None)
 
 
 @app.post("/api/chat")
