@@ -2,7 +2,7 @@
 
 Serves the static UI (web/) plus /api/metrics, which aggregates every second:
   - GPU stats via NVML (pynvml)
-  - vLLM server stats from /v1/models, /v1/version and /metrics (Prometheus text)
+  - vLLM server stats from /v1/models, /version and /metrics (Prometheus text)
   - host stats from /proc and psutil (CPU, RAM, disk)
 
 The frontend polls /api/metrics once per second. No third-party UI framework.
@@ -102,7 +102,7 @@ def vllm_info():
     info["id"] = models[0]["id"] if models else "unknown"
     info["max_ctx"] = (models[0].get("max_model_len") if models else None) or 0
     try:
-        info["version"] = vllm_get("/v1/version", timeout=1.5).json().get("version", "")
+        info["version"] = vllm_get("/version", timeout=1.5).json().get("version", "")
     except Exception:
         info["version"] = ""
     return info
