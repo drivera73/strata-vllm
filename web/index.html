@@ -6,7 +6,7 @@
 <title>vLLM</title>
 <link rel="stylesheet" href="tokens.css?v=3">
 <link rel="stylesheet" href="components.css?v=3">
-<link rel="stylesheet" href="app.css?v=4">
+<link rel="stylesheet" href="app.css?v=5">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='9' fill='%2334d399'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -159,6 +159,14 @@
           <div id="s-disk"></div>
         </div>
       </div>
+      <div class="st-card metric-card">
+        <div class="st-metric">
+          <span class="st-metric__label"><svg class="st-icon st-icon--sm"><use href="sprite.svg#i-activity"/></svg>Prefix cache</span>
+          <span class="st-metric__value" id="m-pfx">–<span class="st-metric__unit">% hit</span></span>
+          <span class="st-metric__sub" id="m-pfx-sub">—</span>
+          <div id="s-pfx"></div>
+        </div>
+      </div>
     </div>
 
     <div class="monitor-row">
@@ -175,8 +183,7 @@
         <div class="st-progress" id="ctx-ram" data-tone="danger"><div class="st-progress__bar" id="ctx-ram-bar" style="width:0%"></div></div>
         <div class="bar-row"><span>GPU temperature</span><span id="ctx-temp-nums">–</span></div>
         <div class="st-progress" id="ctx-temp" data-tone="warn"><div class="st-progress__bar" id="ctx-temp-bar" style="width:0%"></div></div>
-        <div class="bar-row"><span>Prefix cache</span><span id="ctx-pfx-nums">–</span></div>
-        <div class="st-progress" id="ctx-pfx" data-tone="info"><div class="st-progress__bar" id="ctx-pfx-bar" style="width:0%"></div></div>
+        <div class="bar-row"><span>KV evictions</span><span id="ctx-evict">–</span></div>
       </div>
 
       <div class="st-card req-card">
@@ -278,6 +285,6 @@
 
 <div class="st-toasts" id="toasts"></div>
 
-<script src="app.js?v=4"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>

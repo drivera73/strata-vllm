@@ -140,6 +140,12 @@ function renderMetrics(d) {
   $("m-cpu").innerHTML = fmt(h.cpu) + `<span class="st-metric__unit">%</span>`;
   $("m-cpu-sub").textContent = h.cores ? `${h.cores} cores · ${h.threads} threads` : "—";
 
+  /* prefix cache: share of prompt tokens served from the cache, last 60 s */
+  const p = d.prefix || {};
+  $("m-pfx").innerHTML = fmt(p.rate === null || p.rate === undefined ? null : p.rate * 100) + `<span class="st-metric__unit">% hit</span>`;
+  $("m-pfx-sub").textContent = (p.queries ? `${fmt(p.hits)} of ${fmt(p.queries)} tokens (60 s)` : "no prompts (60 s)")
+    + (p.preemptions ? ` · ${fmt(p.preemptions)} preempted` : "");
+
   $("m-disk").innerHTML = fmt(h.disk_read, 1) + `<span class="st-metric__unit">MB/s</span>`;
   $("m-disk-sub").textContent = h.disk_write !== null && h.disk_write !== undefined ? `write ${fmt(h.disk_write, 1)} MB/s` : "—";
 
@@ -152,6 +158,7 @@ function renderMetrics(d) {
   sparkline($("s-power"), H.power, {});
   sparkline($("s-cpu"), H.cpu, { max: 100 });
   sparkline($("s-disk"), H.disk, {});
+  sparkline($("s-pfx"), H.pfx, { max: 1, tone: "info" });
 
   /* context panel */
   const kv = d.kv, ctx = d.model && d.model.max_ctx;
@@ -166,9 +173,12 @@ function renderMetrics(d) {
   $("ctx-temp-nums").textContent = g.temp !== undefined ? `${fmt(g.temp)} °C` : "–";
   if (g.temp !== undefined) $("ctx-temp-bar").style.width = Math.min(100, (g.temp / 100) * 100) + "%";
 
-  const pr = d.prefix && d.prefix.rate;
-  $("ctx-pfx-nums").textContent = pr === null || pr === undefined ? "–" : `${fmt(pr * 100, 0)}% reuse`;
-  if (pr !== null && pr !== undefined) $("ctx-pfx-bar").style.width = Math.min(100, pr * 100) + "%";
+  /* evicted KV blocks (vLLM --kv-cache-metrics): averages since vLLM started */
+  const ev = d.kv_evict || {};
+  const dur = (s) => (s === null || s === undefined ? "–" : s >= 60 ? `${fmt(s / 60, 1)} min` : `${fmt(s)} s`);
+  $("ctx-evict").textContent = ev.samples
+    ? `lived ${dur(ev.lifetime)} · idle ${dur(ev.idle)} · gap ${dur(ev.reuse_gap)}`
+    : "none yet";
 
   /* requests table */
   const rows = d.requests || [];

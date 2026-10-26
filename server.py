@@ -71,7 +71,7 @@ def save_config(cfg):
 STATE = {
     "cfg": load_config(),
     "history": {k: deque(maxlen=HISTORY_LEN) for k in
-                ("tok_s", "gpu", "vram", "temp", "power", "pcie", "cpu", "disk")},
+                ("tok_s", "gpu", "vram", "temp", "power", "pcie", "cpu", "disk", "pfx")},
     "requests": deque(maxlen=MAX_REQUESTS),
     "active": [],         # in-flight requests (tracked via num_requests_running)
     "prev": {},            # counter bookkeeping for vLLM + host rates
@@ -378,10 +378,11 @@ def sample():
     # histograms, which only move when a request finishes).
     speed, speed_kind = None, None
     prefill_tok_s = None
-    gen_n = pmt = None
+    gen_n = pmt = cached_n = None
     if dt:
         gen_n = counter_delta("generation_tokens_total", vllm_m)
         pmt = counter_delta("prompt_tokens_total", vllm_m)
+        cached_n = counter_delta("prompt_tokens_cached_total", vllm_m)
         if gen_n and gen_n > 0:
             speed, speed_kind = gen_n / dt, "decode"
         if pmt and pmt > 0:
@@ -397,11 +398,12 @@ def sample():
     prev_running = len(STATE["active"])
     if running:
         while len(STATE["active"]) < running:
-            STATE["active"].append({"start": time.time(), "prompt": 0, "output": 0})
+            STATE["active"].append({"start": time.time(), "prompt": 0, "reused": 0, "output": 0})
         while len(STATE["active"]) > running:  # preemptions / drops
             STATE["active"].pop()
         for a in STATE["active"]:
             a["prompt"] += int(pmt or 0)
+            a["reused"] += int(cached_n or 0)
             a["output"] += int(gen_n or 0)
     else:
         # every tracked request just finished: fold into the requests log
@@ -410,7 +412,7 @@ def sample():
             STATE["requests"].appendleft({
                 "time": time.time(),
                 "prompt": a["prompt"],
-                "reused": 0,
+                "reused": a["reused"],
                 "output": a["output"],
                 "tok_s": (a["output"] / dur) if dur > 0 else None,
                 "prefill_s": None,
@@ -448,10 +450,14 @@ def sample():
         "hits": counter_delta("prefix_cache_hits_total", vllm_m),
         "queries": counter_delta("prefix_cache_queries_total", vllm_m),
     }
-    # rolling reuse ratio (last 60 s) instead of cumulative-since-boot
-    if STATE["prefix"]["hits"] is not None and STATE["prefix"]["queries"]:
-        STATE.setdefault("reuse", deque(maxlen=HISTORY_LEN)).append(
-            STATE["prefix"]["hits"] / STATE["prefix"]["queries"])
+    # rolling reuse (last 60 s) instead of cumulative-since-boot
+    h, q = STATE["prefix"]["hits"], STATE["prefix"]["queries"]
+    if h is not None and q is not None:
+        STATE.setdefault("reuse", deque(maxlen=HISTORY_LEN)).append((h, q))
+    if dt:  # the rolling rate, so the graph doesn't break up between prompts
+        reuse = STATE.get("reuse") or []
+        q60 = sum(x[1] for x in reuse)
+        hist["pfx"].append(sum(x[0] for x in reuse) / q60 if q60 else None)
 
 
 # ------------------------------------------------------------------ API
@@ -577,6 +583,13 @@ def metrics():
                   if last_req and last_req["tok_s"] else "no requests yet")
 
     ctx = info.get("max_ctx") or 0
+
+    reuse = s.get("reuse") or []
+    hits60, queries60 = sum(x[0] for x in reuse), sum(x[1] for x in reuse)
+
+    def avg(name):
+        c = m.get(name + "_count")
+        return m.get(name + "_sum", 0) / c if c else None
     used = int(kv * ctx) if kv is not None and ctx else 0
 
     reqs = []
@@ -631,8 +644,16 @@ def metrics():
         },
         "ctx_used": used,
         "prefix": {
-            "hits": prefix.get("hits"), "queries": prefix.get("queries"),
-            "rate": (sum(s["reuse"]) / len(s["reuse"])) if s.get("reuse") else None,
+            "hits": hits60, "queries": queries60,      # tokens, last 60 s
+            "rate": hits60 / queries60 if queries60 else None,
+            "preemptions": m.get("num_preemptions_total"),
+        },
+        # evicted KV blocks (vLLM --kv-cache-metrics, sampled): average seconds since start
+        "kv_evict": {
+            "samples": m.get("kv_block_lifetime_seconds_count"),
+            "lifetime": avg("kv_block_lifetime_seconds"),
+            "idle": avg("kv_block_idle_before_evict_seconds"),
+            "reuse_gap": avg("kv_block_reuse_gap_seconds"),
         },
         "requests": reqs,
         "history": {k: [None if v is None else round(v, 2) for v in s["history"][k]]
