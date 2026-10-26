@@ -118,31 +118,18 @@ function renderMetrics(d) {
   $("m-speed").innerHTML = fmt(d.speed, 1) + `<span class="st-metric__unit">tok/s</span>`;
   $("m-speed-sub").textContent = d.speed_kind === "prefill" ? "prefill" : d.speed_kind === "decode" ? "decode" : "last request";
 
-  /* per-GPU cards */
-  const gpuWrap = $("gpu-cards");
-  if (gs.length) {
-    gpuWrap.innerHTML = gs.map((x) => {
-      const u = x.util == null ? null : x.util;
-      const vU = fmtGB(x.mem_used), vT = fmtGB(x.mem_total);
-      return `<div class="st-card gpu-card">
-        <div class="gpu-card__head">
-          <span class="gpu-card__name">GPU ${x.index}</span>
-          <span class="gpu-card__util">${u == null ? "–" : fmt(u) + "%"}</span>
-        </div>
-        <div class="st-progress gpu-card__bar"><div class="st-progress__bar" style="width:${u == null ? 0 : u}%"></div></div>
-        <div class="gpu-card__stats">
-          <span title="VRAM">${fmt(vU,1)}<small>/${fmt(vT,0)} GB</small></span>
-          <span title="Temp">${x.temp == null ? "–" : fmt(x.temp) + "°C"}</span>
-          <span title="Power">${x.power == null ? "–" : fmt(x.power) + " W"}</span>
-        </div>
-      </div>`;
-    }).join("");
-  } else {
-    gpuWrap.innerHTML = "";
-  }
-
   const multi = gs.length > 1;
   const per = (fn) => gs.map(fn).join(" · ");
+
+  /* GPU tiles: GPU 0's values; with several GPUs the sub line lists each one */
+  $("m-gpu").innerHTML = fmt(g.util) + `<span class="st-metric__unit">%</span>`;
+  $("m-gpu-sub").textContent = multi ? per((x) => (x.util == null ? "–" : `${fmt(x.util)}%`)) : (g.name || "—");
+
+  $("m-vram").innerHTML = fmt(fmtGB(g.mem_used), 1) + `<span class="st-metric__unit">/ ${fmt(fmtGB(g.mem_total), 0)} GB</span>`;
+  $("m-vram-sub").textContent = multi ? per((x) => (x.mem_used == null ? "–" : `${fmt(fmtGB(x.mem_used), 1)} GB`)) : "—";
+
+  $("m-temp").innerHTML = fmt(g.temp) + `<span class="st-metric__unit">°C</span>`;
+  $("m-temp-sub").textContent = multi ? per((x) => (x.temp == null ? "–" : `${fmt(x.temp)}°C`)) : "—";
 
   /* total power (sum of all GPUs) */
   $("m-power").innerHTML = fmt(g.power) + `<span class="st-metric__unit">W</span>`;
@@ -159,6 +146,9 @@ function renderMetrics(d) {
   /* sparklines (60 s of 1 Hz samples) */
   const H = d.history || {};
   sparkline($("s-speed"), H.tok_s, {});
+  sparkline($("s-gpu"), H.gpu, { max: 100 });
+  sparkline($("s-vram"), H.vram, { max: g.mem_total });
+  sparkline($("s-temp"), H.temp, { tone: "warn" });
   sparkline($("s-power"), H.power, {});
   sparkline($("s-cpu"), H.cpu, { max: 100 });
   sparkline($("s-disk"), H.disk, {});
