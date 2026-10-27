@@ -182,6 +182,7 @@ function renderMetrics(d) {
 
   /* requests table */
   const rows = d.requests || [];
+  const bs = (d.model && d.model.block_size) || 1;     /* prefix cache block, tokens */
   const tbody = $("req-rows");
   if (!rows.length) {
     tbody.innerHTML = `<tr><td colspan="8" class="muted">Waiting for requests…</td></tr>`;
@@ -199,7 +200,9 @@ function renderMetrics(d) {
         <td class="num">${r.reused ? fmt(r.reused) : "0"}</td>
         <td class="num">${fmt(r.output)}</td>
         <td class="num">${r.tok_s ? fmt(r.tok_s, 1) : "–"}</td>
-        <td class="num" title="Prompt tokens served from the prefix cache">${r.prompt ? fmt((100 * r.reused) / r.prompt, 1) + "%" : "–"}</td>
+        ${r.prompt && r.prompt >= bs
+          ? `<td class="num" title="Prompt tokens served from the prefix cache">${fmt((100 * r.reused) / r.prompt, 1)}%</td>`
+          : `<td class="num" title="Prompt shorter than one prefix cache block (${fmt(bs)} tokens): too short to cache">–</td>`}
         <td class="num">${fmt(r.duration, 1)} s</td>
       </tr>`;
     }).join("");

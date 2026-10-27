@@ -352,7 +352,11 @@ def sample():
 
     gpu, vllm_m, host = None, {}, None
     try:
-        vllm_m = parse_metrics(vllm_get("/metrics").text)
+        text = vllm_get("/metrics").text
+        vllm_m = parse_metrics(text)
+        # prefix cache block size (tokens): prompts shorter than one block can't be cached
+        bs = re.search(r'vllm:cache_config_info\{[^}]*block_size="(\d+)"', text)
+        STATE["block_size"] = int(bs.group(1)) if bs else None
     except Exception as e:
         STATE["last_error"] = f"backend unreachable: {e.__class__.__name__}"
     else:
@@ -603,7 +607,8 @@ def metrics():
         "state": state,
         "detail": detail,
         "kv": kv,
-        "model": {"id": info.get("id"), "version": info.get("version"), "max_ctx": ctx},
+        "model": {"id": info.get("id"), "version": info.get("version"), "max_ctx": ctx,
+                  "block_size": s.get("block_size")},
         "speed": speed,
         "speed_kind": speed_kind,
         "prefill": live.get("prefill_tok_s"),
